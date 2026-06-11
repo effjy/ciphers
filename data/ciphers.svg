@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <!-- Dark cyber background, matching the app theme (#070b12 / #0e1726). -->
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0e1726"/>
+      <stop offset="1" stop-color="#070b12"/>
+    </linearGradient>
+    <!-- Neon cyan for the lock body. -->
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0c1a2b"/>
+      <stop offset="1" stop-color="#0a1320"/>
+    </linearGradient>
+    <linearGradient id="keyhole" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#39ff14"/>
+      <stop offset="1" stop-color="#00e5ff"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Panel -->
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"
+        stroke="#00e5ff" stroke-width="3" stroke-opacity="0.55"/>
+
+  <!-- Faint circuit traces for the cyber feel -->
+  <g stroke="#00e5ff" stroke-opacity="0.18" stroke-width="3" fill="none" stroke-linecap="round">
+    <path d="M28 76 H64"/>
+    <path d="M28 180 H58"/>
+    <path d="M228 96 H196"/>
+    <path d="M228 196 H192"/>
+    <circle cx="64" cy="76" r="4" fill="#00e5ff" fill-opacity="0.3" stroke="none"/>
+    <circle cx="196" cy="96" r="4" fill="#00e5ff" fill-opacity="0.3" stroke="none"/>
+    <circle cx="58" cy="180" r="4" fill="#00e5ff" fill-opacity="0.3" stroke="none"/>
+    <circle cx="192" cy="196" r="4" fill="#00e5ff" fill-opacity="0.3" stroke="none"/>
+  </g>
+
+  <!-- Shackle: glow underlay + solid neon stroke -->
+  <path d="M88 122 V96 a40 40 0 0 1 80 0 V122"
+        fill="none" stroke="#00e5ff" stroke-opacity="0.25"
+        stroke-width="26" stroke-linecap="round"/>
+  <path d="M88 122 V96 a40 40 0 0 1 80 0 V122"
+        fill="none" stroke="#00e5ff" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- Lock body: glow underlay + neon-bordered dark body -->
+  <rect x="60" y="116" width="136" height="108" rx="22"
+        fill="none" stroke="#00e5ff" stroke-opacity="0.25" stroke-width="12"/>
+  <rect x="60" y="116" width="136" height="108" rx="22"
+        fill="url(#body)" stroke="#00e5ff" stroke-width="4"/>
+
+  <!-- Keyhole in neon green→cyan -->
+  <circle cx="128" cy="158" r="17" fill="url(#keyhole)"/>
+  <path d="M120 168 L136 168 L132 200 L124 200 Z" fill="url(#keyhole)"/>
+</svg>
