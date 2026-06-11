@@ -12,7 +12,6 @@ with modern authenticated encryption.**
 ![Crypto: libsodium + Argon2id](https://img.shields.io/badge/crypto-libsodium%20%2B%20Argon2id-00b3c4?labelColor=0e1726)
 ![AEAD: AES-256-GCM | XChaCha20 | ChaCha20](https://img.shields.io/badge/AEAD-AES--256--GCM%20%7C%20XChaCha20%20%7C%20ChaCha20-ff426f?labelColor=0e1726)
 <br>
-[![Stars](https://img.shields.io/github/stars/effjy/ciphers?color=00e5ff&labelColor=0e1726)](https://github.com/effjy/ciphers/stargazers)
 [![Issues](https://img.shields.io/github/issues/effjy/ciphers?color=ff426f&labelColor=0e1726)](https://github.com/effjy/ciphers/issues)
 [![Last commit](https://img.shields.io/github/last-commit/effjy/ciphers?color=39ff14&labelColor=0e1726)](https://github.com/effjy/ciphers/commits)
 
