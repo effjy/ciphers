@@ -1,39 +1,53 @@
 <div align="center">
 
-# 🔒 Ciphers
+# ❖ Ciphers v1.0.2
 
 **A simple, secure GTK3 desktop application for encrypting and decrypting files
-with modern authenticated encryption.**
-
-[![Version](https://img.shields.io/badge/version-1.0.2-00e5ff?labelColor=0e1726)](https://github.com/effjy/ciphers/releases)
-[![License: MIT](https://img.shields.io/badge/license-MIT-39ff14?labelColor=0e1726)](https://github.com/effjy/ciphers/blob/main/LICENSE)
-![Platform: Linux](https://img.shields.io/badge/platform-Linux-9fd6e6?labelColor=0e1726)
-![Toolkit: GTK3](https://img.shields.io/badge/GTK-3-9fd6e6?labelColor=0e1726)
-![Crypto: libsodium + Argon2id](https://img.shields.io/badge/crypto-libsodium%20%2B%20Argon2id-00b3c4?labelColor=0e1726)
-![AEAD: AES-256-GCM | XChaCha20 | ChaCha20](https://img.shields.io/badge/AEAD-AES--256--GCM%20%7C%20XChaCha20%20%7C%20ChaCha20-ff426f?labelColor=0e1726)
-<br>
-[![Issues](https://img.shields.io/github/issues/effjy/ciphers?color=ff426f&labelColor=0e1726)](https://github.com/effjy/ciphers/issues)
-[![Last commit](https://img.shields.io/github/last-commit/effjy/ciphers?color=39ff14&labelColor=0e1726)](https://github.com/effjy/ciphers/commits)
+with modern authenticated encryption — now with post-quantum hybrid key
+encapsulation.**
 
 Author: **Jean-Francois Lachance-Caumartin**
 
-🔗 **[github.com/effjy/ciphers](https://github.com/effjy/ciphers/)**
+[![License: MIT](https://img.shields.io/badge/License-MIT-00e5ff.svg?style=flat-square)](LICENSE)
+[![Version](https://img.shields.io/badge/version-1.0.2-39ff14.svg?style=flat-square)](#)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-0e1b2b.svg?style=flat-square&logo=linux&logoColor=white)](#)
+[![Language: C](https://img.shields.io/badge/language-C-555555.svg?style=flat-square&logo=c&logoColor=white)](#)
+[![GUI: GTK3](https://img.shields.io/badge/GUI-GTK3-4e9a06.svg?style=flat-square&logo=gtk&logoColor=white)](#)
+
+[![AEAD: AES-256-GCM](https://img.shields.io/badge/AEAD-AES--256--GCM-00b3c4.svg?style=flat-square)](#)
+[![AEAD: XChaCha20-Poly1305](https://img.shields.io/badge/AEAD-XChaCha20--Poly1305-00b3c4.svg?style=flat-square)](#)
+[![KDF: Argon2id](https://img.shields.io/badge/KDF-Argon2id-9b59b6.svg?style=flat-square)](#)
+[![PQC: Kyber-1024 + X448](https://img.shields.io/badge/PQC-Kyber--1024%20%2B%20X448-ff426f.svg?style=flat-square)](#)
+[![crypto: libsodium](https://img.shields.io/badge/crypto-libsodium-1a5276.svg?style=flat-square)](#)
 
 </div>
+
+---
 
 ## Screenshot
 
 <div align="center">
 
-![Ciphers screenshot](screenshot.png)
+![Ciphers main window](data/screenshot.png)
+
+*The Ciphers main window — pick a cipher, key strength and (optionally) the
+post-quantum hybrid layer, then encrypt or decrypt with a single password.*
 
 </div>
+
+---
 
 ## Features
 
 - Encrypt and decrypt any file with a password.
 - Authenticated encryption with **AES-256-GCM** (default), **XChaCha20-Poly1305**
   or **ChaCha20-Poly1305**.
+- Optional **post-quantum hybrid KEM** — **Kyber-1024** (NIST level 5) combined
+  with the **X448** elliptic curve. When enabled, the file's AEAD key is the
+  shared secret of a hybrid key encapsulation; the matching secret key is
+  wrapped with your Argon2id password-derived key, so a single password still
+  unlocks the file and the encryption stays secure even against a quantum
+  adversary. Hybrid files are auto-detected on decryption.
 - **Argon2id** key derivation with a configurable strength setting:
   - **Basic** — 256 MiB
   - **Medium** — 1 GiB, parallel *(minimum recommended)*
@@ -50,21 +64,21 @@ Author: **Jean-Francois Lachance-Caumartin**
 ## Prerequisites
 
 You need a C compiler, `make`, and the development packages for GTK3,
-libsodium and libargon2.
+libsodium, libargon2 and OpenSSL (libcrypto, used for the X448 curve).
 
 ### Ubuntu / Debian
 
 ```bash
 sudo apt update
 sudo apt install build-essential pkg-config \
-    libgtk-3-dev libsodium-dev libargon2-dev
+    libgtk-3-dev libsodium-dev libargon2-dev libssl-dev
 ```
 
 ### Fedora
 
 ```bash
 sudo dnf install gcc make pkgconf-pkg-config \
-    gtk3-devel libsodium-devel libargon2-devel
+    gtk3-devel libsodium-devel libargon2-devel openssl-devel
 ```
 
 ## Building
@@ -113,6 +127,8 @@ sudo make uninstall
    - Select the **Cipher** (AES-256-GCM by default; XChaCha20-Poly1305 or
      ChaCha20-Poly1305 also available).
    - Select the **Key strength** (Medium is the minimum recommended).
+   - Optionally tick **Post-quantum hybrid (Kyber-1024 + X448)** for an extra
+     post-quantum protection layer.
    - On decryption these are read automatically from the file header.
 5. Type your **Password**. Tick **Reveal** to display it while typing.
 6. Click **Encrypt** / **Decrypt**. A progress bar shows the operation; key
@@ -128,6 +144,15 @@ parallelism), a random salt and a random base nonce. The payload is split
 into 64 KiB chunks, each encrypted as an independent AEAD frame whose
 associated data binds the chunk's position and an end-of-stream flag — so
 tampering, reordering or truncation is always detected on decryption.
+
+Hybrid (post-quantum) files use format version 2: between the header and the
+base nonce they carry a hybrid block — the file's hybrid secret key wrapped
+with the password-derived key (XChaCha20-Poly1305) and the KEM ciphertext. On
+decryption the password unwraps the secret key, which decapsulates the KEM
+ciphertext back to the AEAD key. (The per-file public keys are not stored: they
+are not needed to decrypt, and omitting them keeps every header byte
+authenticated.) The format version byte lets the app pick the right path
+automatically.
 
 If decryption fails, the password is wrong or the file has been corrupted or
 tampered with; the partial output file is removed automatically.
