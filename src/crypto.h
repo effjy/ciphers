@@ -42,10 +42,16 @@ int ciphers_cipher_available(cipher_id_t id);
 const char *ciphers_cipher_name(cipher_id_t id);
 
 /* Encrypt in_path -> out_path. Returns 0 on success; on failure returns
- * non-zero and fills err (size errlen) with a message. */
+ * non-zero and fills err (size errlen) with a message.
+ *
+ * If hybrid is non-zero, a post-quantum hybrid KEM layer is used: a fresh
+ * Kyber-1024 + X448 keypair is generated for the file, its secret key is
+ * wrapped with the Argon2id password-derived master key, and the KEM
+ * shared secret becomes the AEAD key. The password still protects
+ * everything, so decryption needs only the password. */
 int ciphers_encrypt_file(const char *in_path, const char *out_path,
                          const char *password, cipher_id_t cipher,
-                         kdf_level_t level,
+                         kdf_level_t level, int hybrid,
                          ciphers_progress_cb cb, void *cb_user,
                          char *err, size_t errlen);
 

@@ -124,6 +124,7 @@ typedef struct {
     GtkWidget *out_entry;
     GtkWidget *cipher_combo;
     GtkWidget *kdf_combo;
+    GtkWidget *hybrid_check;
     GtkWidget *pass_entry;
     GtkWidget *reveal_check;
     GtkWidget *run_button;
@@ -143,6 +144,7 @@ struct Job {
     char        password[PASSWORD_MAX];
     cipher_id_t cipher;
     kdf_level_t level;
+    int         hybrid;
     int         decrypt;
     /* results */
     int         rc;
@@ -290,7 +292,7 @@ static gpointer worker_thread(gpointer data) {
                                        progress_cb, job, job->err, sizeof(job->err));
     } else {
         job->rc = ciphers_encrypt_file(job->in_path, job->out_path, job->password,
-                                       job->cipher, job->level,
+                                       job->cipher, job->level, job->hybrid,
                                        progress_cb, job, job->err, sizeof(job->err));
     }
     g_idle_add(job_finished_idle, job);
@@ -337,6 +339,9 @@ static void on_mode_toggled(GtkToggleButton *btn, gpointer user) {
      * read from the file header. */
     gtk_widget_set_sensitive(app->cipher_combo, enc);
     gtk_widget_set_sensitive(app->kdf_combo, enc);
+    /* Hybrid mode is an encrypt-time choice; on decrypt it is auto-detected
+     * from the file header. */
+    gtk_widget_set_sensitive(app->hybrid_check, enc);
     gtk_button_set_label(GTK_BUTTON(app->run_button), enc ? "ENCRYPT" : "DECRYPT");
 }
 
@@ -381,6 +386,7 @@ static void on_run(GtkButton *b, gpointer user) {
     job->cipher = cid ? (cipher_id_t)atoi(cid) : CIPHER_AES_256_GCM;
     const gchar *kid = gtk_combo_box_get_active_id(GTK_COMBO_BOX(app->kdf_combo));
     job->level = kid ? (kdf_level_t)atoi(kid) : KDF_MEDIUM;
+    job->hybrid = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app->hybrid_check)) ? 1 : 0;
 
     gtk_widget_set_sensitive(app->run_button, FALSE);
     gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(app->progress), 0.0);
@@ -426,6 +432,9 @@ static void on_about(GtkButton *b, gpointer user) {
         "• Encrypt and decrypt any file with a password\n"
         "• AES-256-GCM (default), XChaCha20-Poly1305 or\n"
         "  ChaCha20-Poly1305 authenticated encryption\n"
+        "• Optional post-quantum hybrid KEM (Kyber-1024 + X448):\n"
+        "  the AEAD key comes from a hybrid key encapsulation whose\n"
+        "  secret key is wrapped by your password\n"
         "• Argon2id key derivation, configurable strength:\n"
         "    – Basic (256 MiB)\n"
         "    – Medium (1 GiB, parallel) — minimum recommended\n"
@@ -572,6 +581,14 @@ static void activate(GtkApplication *gapp, gpointer user) {
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(app->kdf_combo), "2", "Strong (4 GiB, parallel)");
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(app->kdf_combo), "1");
     gtk_box_pack_start(GTK_BOX(root), labeled_row("Key strength:", app->kdf_combo, NULL), FALSE, FALSE, 0);
+
+    /* Post-quantum hybrid KEM (Kyber-1024 + X448). When enabled, the AEAD key
+     * comes from a hybrid KEM whose secret key is wrapped by the password;
+     * decryption auto-detects it from the file header. */
+    app->hybrid_check = gtk_check_button_new_with_label(
+        "Post-quantum hybrid (Kyber-1024 + X448)");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app->hybrid_check), TRUE);
+    gtk_box_pack_start(GTK_BOX(root), labeled_row("Hybrid PQC:", app->hybrid_check, NULL), FALSE, FALSE, 0);
 
     /* Password + reveal. The entry stores its text in a libsodium-backed
      * secure buffer (locked, non-dumpable, zeroed on free) rather than the

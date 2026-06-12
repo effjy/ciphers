@@ -24,6 +24,7 @@
  * authenticates chunk ordering and detects truncation of the stream.
  */
 #include "crypto.h"
+#include "hybrid_kem.h"
 
 #include <sodium.h>
 #include <argon2.h>
@@ -39,12 +40,36 @@
 
 #define MAGIC          "CIPHERS\0"
 #define MAGIC_LEN      8
-#define FORMAT_VERSION 1
+#define FORMAT_VERSION 1          /* password-only: Argon2id -> AEAD key      */
+#define FORMAT_VERSION_HYBRID 2   /* Kyber-1024 + X448 hybrid KEM (see below) */
 #define KDF_ID_ARGON2ID 1
 #define SALT_LEN       16
 #define CHUNK_SIZE     65536
 #define MAX_NONCE_LEN  24
 #define MAX_TAG_LEN    16
+
+/* ----- Hybrid KEM (format version 2) layout ----------------------------- *
+ * The 40-byte common header (magic .. salt) is followed by a hybrid block,
+ * then the base nonce and the usual AEAD frames. The hybrid block holds the
+ * file's secret key wrapped with the Argon2id password-derived master key
+ * (XChaCha20-Poly1305) and the KEM ciphertext. On decryption the password
+ * unwraps the secret key, which decapsulates the KEM ciphertext back to the
+ * AEAD key.
+ *
+ * The per-file public keys are deliberately NOT stored: decapsulation needs
+ * only the secret key and the KEM ciphertext, so keeping the public keys
+ * would just add ~1.6 KiB of unauthenticated (malleable) header bytes. Every
+ * byte that remains is authenticated -- the wrap nonce and wrapped secret key
+ * by the wrap's Poly1305 tag, and the KEM ciphertext transitively, since
+ * altering it changes the decapsulated key and fails the frame AEAD tags. */
+#define HYBRID_MASTERKEY_LEN  crypto_aead_xchacha20poly1305_ietf_KEYBYTES  /* 32 */
+#define WRAP_NONCE_LEN        crypto_aead_xchacha20poly1305_ietf_NPUBBYTES /* 24 */
+#define WRAP_ABYTES           crypto_aead_xchacha20poly1305_ietf_ABYTES    /* 16 */
+#define WRAPPED_SK_LEN        (HK_SK_LEN + WRAP_ABYTES)
+#define HYBRID_BLOCK_LEN      (WRAP_NONCE_LEN + WRAPPED_SK_LEN + HK_KEM_CT_LEN)
+/* Domain string bound as associated data when wrapping the secret key. */
+#define WRAP_AD               ((const unsigned char *)"CIPHERS-HYBRID-WRAP")
+#define WRAP_AD_LEN           19
 
 /* Upper bounds on KDF parameters accepted from a file header on decryption.
  * A header is untrusted input; without these limits a malicious file could
@@ -179,6 +204,79 @@ static int derive_key(const char *password, const uint8_t *salt,
     return rc == ARGON2_OK ? 0 : -1;
 }
 
+/* ----- Hybrid KEM helpers ----------------------------------------------- */
+
+/* Build the hybrid block and produce the 32-byte AEAD file key.
+ * Generates a fresh Kyber-1024 + X448 keypair, wraps its secret key with the
+ * password-derived master key, encapsulates to its public key, and lays the
+ * public keys, wrap nonce, wrapped secret key and KEM ciphertext into block
+ * (HYBRID_BLOCK_LEN bytes). Returns 0 on success, -1 on failure. */
+static int hybrid_build(const char *password, const uint8_t *salt,
+                        const kdf_params_t *kp,
+                        uint8_t block[HYBRID_BLOCK_LEN],
+                        uint8_t file_key[HK_SHARED_SECRET_LEN]) {
+    uint8_t master[HYBRID_MASTERKEY_LEN];
+    uint8_t kyber_pk[HK_KYBER_PUBLICKEYBYTES], x448_pk[HK_X448_PUBKEY_LEN];
+    uint8_t hybrid_sk[HK_SK_LEN];   /* kyber_sk || x448_sk */
+    int ret = -1;
+
+    sodium_mlock(master, sizeof(master));
+    sodium_mlock(hybrid_sk, sizeof(hybrid_sk));
+
+    if (derive_key(password, salt, kp, master, sizeof(master)) != 0) goto out;
+    if (hk_generate_keypair(kyber_pk, hybrid_sk,
+                            x448_pk, hybrid_sk + HK_KYBER_SECRETKEYBYTES) != 0) goto out;
+
+    uint8_t *p = block;
+    uint8_t *wrap_nonce = p;       p += WRAP_NONCE_LEN;
+    uint8_t *wrapped_sk = p;       p += WRAPPED_SK_LEN;
+    uint8_t *kem_ct     = p;       /* HK_KEM_CT_LEN */
+
+    randombytes_buf(wrap_nonce, WRAP_NONCE_LEN);
+    crypto_aead_xchacha20poly1305_ietf_encrypt(wrapped_sk, NULL,
+        hybrid_sk, HK_SK_LEN, WRAP_AD, WRAP_AD_LEN, NULL, wrap_nonce, master);
+
+    if (hk_encapsulate(file_key, kem_ct, kyber_pk, x448_pk) != 0) goto out;
+    ret = 0;
+out:
+    sodium_munlock(master, sizeof(master));
+    sodium_munlock(hybrid_sk, sizeof(hybrid_sk));
+    return ret;
+}
+
+/* Recover the 32-byte AEAD file key from a hybrid block: derive the master
+ * key from the password, unwrap the secret key, and decapsulate the KEM
+ * ciphertext. Returns 0 on success, -1 on failure (e.g. wrong password,
+ * which is caught by the wrap tag). */
+static int hybrid_open(const char *password, const uint8_t *salt,
+                       const kdf_params_t *kp,
+                       const uint8_t block[HYBRID_BLOCK_LEN],
+                       uint8_t file_key[HK_SHARED_SECRET_LEN]) {
+    uint8_t master[HYBRID_MASTERKEY_LEN];
+    uint8_t hybrid_sk[HK_SK_LEN];
+    int ret = -1;
+
+    sodium_mlock(master, sizeof(master));
+    sodium_mlock(hybrid_sk, sizeof(hybrid_sk));
+
+    const uint8_t *wrap_nonce = block;
+    const uint8_t *wrapped_sk = wrap_nonce + WRAP_NONCE_LEN;
+    const uint8_t *kem_ct     = wrapped_sk + WRAPPED_SK_LEN;
+
+    if (derive_key(password, salt, kp, master, sizeof(master)) != 0) goto out;
+    if (crypto_aead_xchacha20poly1305_ietf_decrypt(hybrid_sk, NULL, NULL,
+            wrapped_sk, WRAPPED_SK_LEN, WRAP_AD, WRAP_AD_LEN, wrap_nonce, master) != 0)
+        goto out;   /* wrong password or tampered key material */
+
+    if (hk_decapsulate(file_key, kem_ct, hybrid_sk,
+                       hybrid_sk + HK_KYBER_SECRETKEYBYTES) != 0) goto out;
+    ret = 0;
+out:
+    sodium_munlock(master, sizeof(master));
+    sodium_munlock(hybrid_sk, sizeof(hybrid_sk));
+    return ret;
+}
+
 /* ----- Little-endian helpers ------------------------------------------- */
 
 static void put_u32(uint8_t *b, uint32_t v) {
@@ -240,7 +338,7 @@ int ciphers_init(void) {
 
 int ciphers_encrypt_file(const char *in_path, const char *out_path,
                          const char *password, cipher_id_t cipher_id,
-                         kdf_level_t level,
+                         kdf_level_t level, int hybrid,
                          ciphers_progress_cb cb, void *cb_user,
                          char *err, size_t errlen) {
     if (!password || !*password) {
@@ -248,6 +346,11 @@ int ciphers_encrypt_file(const char *in_path, const char *out_path,
     }
     const cipher_t *cph = find_cipher(cipher_id);
     if (!cph) { seterr(err, errlen, "Unknown cipher."); return -1; }
+    /* The hybrid KEM shared secret is 32 bytes, matching the AEAD key length
+     * of every cipher in the registry; guard the assumption explicitly. */
+    if (hybrid && cph->key_len != HK_SHARED_SECRET_LEN) {
+        seterr(err, errlen, "Hybrid mode requires a 256-bit cipher key."); return -1;
+    }
     if (!ciphers_cipher_available(cipher_id)) {
         seterr(err, errlen, "Cipher not supported on this CPU (AES-256-GCM needs hardware AES).");
         return -1;
@@ -282,7 +385,17 @@ int ciphers_encrypt_file(const char *in_path, const char *out_path,
     randombytes_buf(salt, SALT_LEN);
     randombytes_buf(base_nonce, cph->nonce_len);
 
-    if (derive_key(password, salt, &kp, key, cph->key_len) != 0) {
+    /* The hybrid block is large (~6.5 KiB); allocate it on the heap so it is
+     * only present when actually encrypting in hybrid mode. */
+    uint8_t *hybrid_block = NULL;
+    if (hybrid) {
+        hybrid_block = malloc(HYBRID_BLOCK_LEN);
+        if (!hybrid_block) { seterr(err, errlen, "Out of memory."); goto done; }
+        if (hybrid_build(password, salt, &kp, hybrid_block, key) != 0) {
+            seterr(err, errlen, "Hybrid key setup failed (KDF memory, or crypto error).");
+            free(hybrid_block); hybrid_block = NULL; goto done;
+        }
+    } else if (derive_key(password, salt, &kp, key, cph->key_len) != 0) {
         seterr(err, errlen, "Key derivation failed (insufficient memory for this KDF level?).");
         goto done;
     }
@@ -290,7 +403,7 @@ int ciphers_encrypt_file(const char *in_path, const char *out_path,
     /* Header */
     uint8_t hdr[40];
     memcpy(hdr, MAGIC, MAGIC_LEN);
-    hdr[8]  = FORMAT_VERSION;
+    hdr[8]  = hybrid ? FORMAT_VERSION_HYBRID : FORMAT_VERSION;
     hdr[9]  = (uint8_t)cipher_id;
     hdr[10] = KDF_ID_ARGON2ID;
     hdr[11] = (uint8_t)level;
@@ -299,9 +412,11 @@ int ciphers_encrypt_file(const char *in_path, const char *out_path,
     put_u32(hdr + 20, kp.parallelism);
     memcpy(hdr + 24, salt, SALT_LEN);
     if (fwrite(hdr, 1, sizeof(hdr), out) != sizeof(hdr) ||
+        (hybrid && fwrite(hybrid_block, 1, HYBRID_BLOCK_LEN, out) != HYBRID_BLOCK_LEN) ||
         fwrite(base_nonce, 1, cph->nonce_len, out) != cph->nonce_len) {
-        seterr(err, errlen, "Write error."); goto done;
+        seterr(err, errlen, "Write error."); free(hybrid_block); goto done;
     }
+    free(hybrid_block); hybrid_block = NULL;
 
     /* Determine total size for progress. */
     uint64_t total = 0;
@@ -397,7 +512,8 @@ int ciphers_decrypt_file(const char *in_path, const char *out_path,
         memcmp(hdr, MAGIC, MAGIC_LEN) != 0) {
         seterr(err, errlen, "Not a Ciphers file (bad magic)."); goto done;
     }
-    if (hdr[8] != FORMAT_VERSION) {
+    int hybrid = (hdr[8] == FORMAT_VERSION_HYBRID);
+    if (hdr[8] != FORMAT_VERSION && !hybrid) {
         seterr(err, errlen, "Unsupported file format version."); goto done;
     }
     cipher_id_t cipher_id = (cipher_id_t)hdr[9];
@@ -423,12 +539,30 @@ int ciphers_decrypt_file(const char *in_path, const char *out_path,
         seterr(err, errlen, "Invalid or unsafe KDF parameters in file."); goto done;
     }
 
+    /* In hybrid mode the secret-key/KEM block precedes the base nonce. */
+    if (hybrid) {
+        if (cph->key_len != HK_SHARED_SECRET_LEN) {
+            seterr(err, errlen, "Hybrid file uses an unsupported cipher key length."); goto done;
+        }
+        uint8_t *hybrid_block = malloc(HYBRID_BLOCK_LEN);
+        if (!hybrid_block) { seterr(err, errlen, "Out of memory."); goto done; }
+        if (fread(hybrid_block, 1, HYBRID_BLOCK_LEN, in) != HYBRID_BLOCK_LEN) {
+            seterr(err, errlen, "Truncated header."); free(hybrid_block); goto done;
+        }
+        int hrc = hybrid_open(password, hdr + 24, &kp, hybrid_block, key);
+        free(hybrid_block);
+        if (hrc != 0) {
+            seterr(err, errlen, "Decryption failed: wrong password or corrupted/tampered file.");
+            goto done;
+        }
+    }
+
     uint8_t base_nonce[MAX_NONCE_LEN];
     if (fread(base_nonce, 1, cph->nonce_len, in) != cph->nonce_len) {
         seterr(err, errlen, "Truncated header."); goto done;
     }
 
-    if (derive_key(password, hdr + 24, &kp, key, cph->key_len) != 0) {
+    if (!hybrid && derive_key(password, hdr + 24, &kp, key, cph->key_len) != 0) {
         seterr(err, errlen, "Key derivation failed."); goto done;
     }
 
