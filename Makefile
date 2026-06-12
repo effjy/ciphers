@@ -20,12 +20,21 @@ ICONDIR  := $(ICONBASE)/scalable/apps
 ICON_SIZES := 16 24 32 48 64 128 256
 
 CC      ?= cc
-PKGS     = gtk+-3.0 libsodium libargon2
+PKGS     = gtk+-3.0 libsodium libargon2 libcrypto
 CFLAGS  ?= -O2 -Wall -Wextra
-CFLAGS  += -DCIPHERS_VERSION=\"$(VERSION)\" $(shell pkg-config --cflags $(PKGS))
+# Kyber-1024 = NIST level 5 (KYBER_K=4); kyber/ holds the CRYSTALS reference.
+CFLAGS  += -DCIPHERS_VERSION=\"$(VERSION)\" -DKYBER_K=4 -Isrc/kyber \
+           $(shell pkg-config --cflags $(PKGS))
 LDLIBS  += $(shell pkg-config --libs $(PKGS))
 
-SRC      = src/main.c src/crypto.c src/secure_buffer.c
+# Kyber-1024 reference sources (non-90s: SHAKE/fips202 only). randombytes is
+# resolved from libsodium, so kyber/randombytes.c is intentionally omitted.
+KYBER_SRC = src/kyber/kem.c src/kyber/indcpa.c src/kyber/poly.c \
+            src/kyber/polyvec.c src/kyber/ntt.c src/kyber/reduce.c \
+            src/kyber/cbd.c src/kyber/fips202.c src/kyber/verify.c \
+            src/kyber/symmetric-shake.c
+
+SRC      = src/main.c src/crypto.c src/secure_buffer.c src/hybrid_kem.c $(KYBER_SRC)
 OBJ      = $(SRC:.c=.o)
 
 .PHONY: all clean install uninstall
