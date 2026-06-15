@@ -209,8 +209,9 @@ static int derive_key(const char *password, const uint8_t *salt,
 /* Build the hybrid block and produce the 32-byte AEAD file key.
  * Generates a fresh Kyber-1024 + X448 keypair, wraps its secret key with the
  * password-derived master key, encapsulates to its public key, and lays the
- * public keys, wrap nonce, wrapped secret key and KEM ciphertext into block
- * (HYBRID_BLOCK_LEN bytes). Returns 0 on success, -1 on failure. */
+ * wrap nonce, wrapped secret key and KEM ciphertext into block
+ * (HYBRID_BLOCK_LEN bytes). The per-file public keys are deliberately not
+ * stored (see the format notes above). Returns 0 on success, -1 on failure. */
 static int hybrid_build(const char *password, const uint8_t *salt,
                         const kdf_params_t *kp,
                         uint8_t block[HYBRID_BLOCK_LEN],
@@ -365,6 +366,12 @@ int ciphers_encrypt_file(const char *in_path, const char *out_path,
     if (make_tmp_path(out_path, tmp_path, sizeof(tmp_path)) != 0) {
         seterr(err, errlen, "Output path is too long."); return -1;
     }
+    /* The temp file is opened with "wb" (truncates). If it happens to resolve
+     * to the input file, that would destroy the input before we read it. */
+    if (same_file(in_path, tmp_path)) {
+        seterr(err, errlen, "Input and output must be different files.");
+        return -1;
+    }
 
     FILE *in = fopen(in_path, "rb");
     if (!in) { seterr(err, errlen, "Cannot open input file."); return -1; }
@@ -496,6 +503,12 @@ int ciphers_decrypt_file(const char *in_path, const char *out_path,
     if (make_tmp_path(out_path, tmp_path, sizeof(tmp_path)) != 0) {
         seterr(err, errlen, "Output path is too long."); return -1;
     }
+    /* The temp file is opened with "wb" (truncates). If it happens to resolve
+     * to the input file, that would destroy the input before we read it. */
+    if (same_file(in_path, tmp_path)) {
+        seterr(err, errlen, "Input and output must be different files.");
+        return -1;
+    }
 
     FILE *in = fopen(in_path, "rb");
     if (!in) { seterr(err, errlen, "Cannot open input file."); return -1; }
@@ -532,10 +545,13 @@ int ciphers_decrypt_file(const char *in_path, const char *out_path,
     kp.parallelism = get_u32(hdr + 20);
 
     /* The header is untrusted: reject parameters that would make Argon2id
-     * exhaust memory or hang. Legitimate files never exceed these bounds. */
+     * exhaust memory or hang. Legitimate files never exceed these bounds.
+     * Argon2 also requires m_cost >= 8 * parallelism; enforce that here so an
+     * out-of-range header is reported precisely instead of failing later
+     * inside the KDF with a generic "key derivation failed". */
     if (kp.t_cost == 0 || kp.t_cost > MAX_KDF_T_COST ||
-        kp.m_cost < 8u || kp.m_cost > MAX_KDF_M_COST ||
-        kp.parallelism == 0 || kp.parallelism > MAX_KDF_PARALLEL) {
+        kp.parallelism == 0 || kp.parallelism > MAX_KDF_PARALLEL ||
+        kp.m_cost < 8u * kp.parallelism || kp.m_cost > MAX_KDF_M_COST) {
         seterr(err, errlen, "Invalid or unsafe KDF parameters in file."); goto done;
     }
 

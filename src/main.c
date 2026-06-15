@@ -12,7 +12,7 @@
 #include "secure_buffer.h"
 
 #ifndef CIPHERS_VERSION
-#define CIPHERS_VERSION "1.0.2"
+#define CIPHERS_VERSION "1.0.3"
 #endif
 #define APP_ID "org.ciphers.Ciphers"
 
@@ -221,10 +221,23 @@ static void set_status(App *app, const char *cls, const char *text) {
     gtk_label_set_text(GTK_LABEL(app->status), text);
 }
 
+/* Stop the KDF progress pulse and remove its timer source. The pulse source
+ * otherwise self-removes only on its next tick (after 'pulsing' goes false),
+ * which can leave a live timer referencing a freed App if the window is
+ * closed in that gap -- call this before freeing the App or finishing a job. */
+static void stop_pulse(App *app) {
+    app->pulsing = FALSE;
+    if (app->pulse_id) {
+        g_source_remove(app->pulse_id);
+        app->pulse_id = 0;
+    }
+}
+
 /* Free the App container itself. Widgets are owned by GTK; this only
  * releases the heap struct allocated in activate(). Must run after the
  * window is gone and no job is in flight (nothing else references app). */
 static void free_app(App *app) {
+    stop_pulse(app);
     g_free(app);
 }
 
@@ -233,7 +246,9 @@ static gboolean job_finished_idle(gpointer data) {
     App *app = job->app;
 
     app->current_job = NULL;
-    app->pulsing = FALSE;
+    /* Stop and remove the KDF pulse timer now: leaving it scheduled would let
+     * it fire (and dereference app) after the window is closed and app freed. */
+    stop_pulse(app);
 
     /* The window was closed while we were working: don't touch destroyed
      * widgets, just clean up and let the held application quit. This idle
@@ -369,6 +384,18 @@ static void on_run(GtkButton *b, gpointer user) {
         gtk_widget_destroy(d);
         return;
     }
+    /* The job stores paths in fixed 4096-byte buffers. Reject anything that
+     * would not fit rather than silently truncating it (a truncated path could
+     * point at a different file). The Job buffers are sizeof == 4096. */
+    if (strlen(in) >= sizeof ((Job *)0)->in_path ||
+        strlen(out) >= sizeof ((Job *)0)->out_path) {
+        GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window),
+            GTK_DIALOG_MODAL, GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
+            "File path is too long.");
+        gtk_dialog_run(GTK_DIALOG(d));
+        gtk_widget_destroy(d);
+        return;
+    }
 
     Job *job = g_new0(Job, 1);
     g_mutex_init(&job->plock);
@@ -410,7 +437,7 @@ static void on_run(GtkButton *b, gpointer user) {
     if (!t) {
         g_application_release(G_APPLICATION(app->gapp));
         app->current_job = NULL;
-        app->pulsing = FALSE;
+        stop_pulse(app);
         gtk_widget_set_sensitive(app->run_button, TRUE);
         set_status(app, "status-err", "\xE2\x9C\x96 Could not start worker thread.");
         sodium_munlock(job->password, sizeof(job->password));
