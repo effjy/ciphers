@@ -170,6 +170,15 @@ tampered with; the partial output file is removed automatically.
   on-screen rendering, the clipboard or the input method) in ordinary memory,
   so this hardening reduces but cannot fully eliminate exposure.
 
+## Security report
+
+A full security report covers the cryptographic design, file format, the
+post-quantum hybrid KEM, the memory-hardening measures, and a detailed threat
+model (including what Ciphers explicitly does **not** protect against).
+
+- 📄 **[Read the report (PDF)](security.pdf)**
+- 📝 **[LaTeX source (security.tex)](security.tex)**
+
 ## Changelog
 
 ### v1.0.3
