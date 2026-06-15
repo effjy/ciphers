@@ -1,6 +1,6 @@
 <div align="center">
 
-# ❖ Ciphers v1.0.2
+# ❖ Ciphers v1.0.3
 
 **A simple, secure GTK3 desktop application for encrypting and decrypting files
 with modern authenticated encryption — now with post-quantum hybrid key
@@ -9,7 +9,7 @@ encapsulation.**
 Author: **Jean-Francois Lachance-Caumartin**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-00e5ff.svg?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.2-39ff14.svg?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-1.0.3-39ff14.svg?style=flat-square)](#)
 [![Platform: Linux](https://img.shields.io/badge/platform-Linux-0e1b2b.svg?style=flat-square&logo=linux&logoColor=white)](#)
 [![Language: C](https://img.shields.io/badge/language-C-555555.svg?style=flat-square&logo=c&logoColor=white)](#)
 [![GUI: GTK3](https://img.shields.io/badge/GUI-GTK3-4e9a06.svg?style=flat-square&logo=gtk&logoColor=white)](#)
@@ -169,6 +169,29 @@ tampered with; the partial output file is removed automatically.
   Note that GTK itself may still hold short-lived copies of typed text (for
   on-screen rendering, the clipboard or the input method) in ordinary memory,
   so this hardening reduces but cannot fully eliminate exposure.
+
+## Changelog
+
+### v1.0.3
+
+Bug-fix and hardening release — no file-format changes; files written by
+earlier versions still decrypt.
+
+- **Fixed** a use-after-free in the GUI: the key-derivation progress pulse
+  timer could outlive the window and fire against freed state if the window
+  was closed in the brief gap after a job finished. The timer is now always
+  removed when the job completes or the window is destroyed.
+- **Fixed** a case where the output's temporary file (`<output>.ciphers-tmp`)
+  could resolve to the input file and truncate it before it was read. The
+  input/output same-file check now also covers the temporary file.
+- **Hardened** decryption against crafted headers: Argon2id parameters from
+  the file are now validated against the `m_cost ≥ 8 × parallelism` rule, so
+  an out-of-range header is rejected with a clear message instead of failing
+  later inside the KDF.
+- **Fixed** silent truncation of over-long input/output paths: paths that do
+  not fit the internal buffers are now rejected with an error rather than
+  quietly truncated (a truncated path could point at a different file).
+- Minor comment/documentation corrections.
 
 ## License
 
