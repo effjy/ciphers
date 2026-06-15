@@ -1,6 +1,6 @@
 <div align="center">
-
-# ❖ Ciphers v1.0.3
+  
+<a href="https://github.com/effjy/ciphers/"><img src="titles/ciphers-v103-title.svg" height="44" alt="Ciphers v1.0.3"></a>
 
 **A simple, secure GTK3 desktop application for encrypting and decrypting files
 with modern authenticated encryption — now with post-quantum hybrid key
