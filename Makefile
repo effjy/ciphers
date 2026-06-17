@@ -5,7 +5,7 @@
 #   sudo make uninstall remove all installed files
 #   make clean        remove build artifacts
 
-VERSION := 1.0.3
+VERSION := 1.0.4
 BIN      := ciphers
 
 PREFIX  ?= /usr/local

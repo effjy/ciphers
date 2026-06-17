@@ -54,7 +54,7 @@
 {\Huge\bfseries\color{ink} Ciphers}\\[0.4cm]
 {\Large Security Report}\\[1.5cm]
 {\large Authenticated file encryption with a post-quantum hybrid KEM}\\[0.3cm]
-{\large Version 1.0.3}\\[2.5cm]
+{\large Version 1.0.4}\\[2.5cm]
 
 \begin{tabular}{rl}
 \textbf{Author:} & Jean-François Lachance-Caumartin\\[0.2cm]
@@ -356,6 +356,18 @@ Multi-recipient public-key sharing            & \no\\
         unaudited.
 \end{itemize}
 
+\subsection*{Recent security fixes (v1.0.4)}
+\begin{itemize}[leftmargin=1.4em]
+  \item Hardened the libsodium-backed secure entry buffer to zero the unused
+        tail of its guarded allocation on every edit, so a typed-then-cleared
+        password no longer persists in locked memory until the widget is freed.
+  \item Fixed a potential integer overflow in the secure buffer's capacity
+        growth that could wrap to zero on a pathological paste.
+  \item Added \texttt{fsync} of the output file and its parent directory around
+        the atomic rename, so a crash or power loss cannot publish a truncated
+        or zero-length output file.
+\end{itemize}
+
 \subsection*{Recent security fixes (v1.0.3)}
 \begin{itemize}[leftmargin=1.4em]
   \item Removed a use-after-free in the GUI progress timer that could fire
@@ -386,7 +398,7 @@ Multi-recipient public-key sharing            & \no\\
 \vfill
 \begin{center}
 \small\textcolor{ink}{\textit{Ciphers is released under the MIT License. This
-report describes version 1.0.3 and is provided for informational purposes; it
+report describes version 1.0.4 and is provided for informational purposes; it
 is not a warranty of fitness for any particular purpose.}}
 \end{center}
 
