@@ -9,7 +9,7 @@ encapsulation.**
 Author: **Jean-Francois Lachance-Caumartin**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-00e5ff.svg?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.3-39ff14.svg?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-1.0.4-39ff14.svg?style=flat-square)](#)
 [![Platform: Linux](https://img.shields.io/badge/platform-Linux-0e1b2b.svg?style=flat-square&logo=linux&logoColor=white)](#)
 [![Language: C](https://img.shields.io/badge/language-C-555555.svg?style=flat-square&logo=c&logoColor=white)](#)
 [![GUI: GTK3](https://img.shields.io/badge/GUI-GTK3-4e9a06.svg?style=flat-square&logo=gtk&logoColor=white)](#)
@@ -180,6 +180,21 @@ model (including what Ciphers explicitly does **not** protect against).
 - 📝 **[LaTeX source (security.tex)](security.tex)**
 
 ## Changelog
+
+### v1.0.4
+
+Bug-fix and hardening release — no file-format changes; files written by
+earlier versions still decrypt.
+
+- **Hardened** the libsodium-backed secure entry buffer: it now zeroes the
+  unused tail of its guarded allocation on every edit, so a typed-then-cleared
+  password no longer lingers in locked memory until the widget is freed.
+- **Fixed** a potential integer overflow in the secure buffer's capacity
+  growth (`ensure_cap`), which could wrap to zero on a pathological paste since
+  the password entry has no maximum length.
+- **Durability:** encryption and decryption now `fsync` the output file and its
+  parent directory before/after the atomic rename, so a crash or power loss can
+  no longer publish a truncated or zero-length output file.
 
 ### v1.0.3
 
