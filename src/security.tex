@@ -1,0 +1,405 @@
+\documentclass[11pt,a4paper]{article}
+
+% ---------------------------------------------------------------------------
+%  Ciphers -- Security Report
+% ---------------------------------------------------------------------------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[margin=1in]{geometry}
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+
+\definecolor{ink}{HTML}{0E1B2B}
+\definecolor{accent}{HTML}{0E7C86}
+\definecolor{good}{HTML}{1B7A2E}
+\definecolor{warn}{HTML}{B23A48}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accent,
+  urlcolor=accent,
+  citecolor=accent,
+  pdftitle={Ciphers Security Report},
+  pdfauthor={Jean-Francois Lachance-Caumartin}
+}
+
+\titleformat{\section}{\Large\bfseries\color{ink}}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\large\bfseries\color{ink}}{\thesubsection}{0.6em}{}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\textsc{Ciphers} — Security Report}
+\rhead{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\newcommand{\yes}{\textcolor{good}{\textbf{Yes}}}
+\newcommand{\no}{\textcolor{warn}{\textbf{No}}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+% ---------------------------------------------------------------------------
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{3cm}
+{\Huge\bfseries\color{ink} Ciphers}\\[0.4cm]
+{\Large Security Report}\\[1.5cm]
+{\large Authenticated file encryption with a post-quantum hybrid KEM}\\[0.3cm]
+{\large Version 1.0.4}\\[2.5cm]
+
+\begin{tabular}{rl}
+\textbf{Author:} & Jean-François Lachance-Caumartin\\[0.2cm]
+\textbf{Document:} & Security architecture \& threat model\\[0.2cm]
+\textbf{Status:} & Public\\
+\end{tabular}
+
+\vfill
+{\large \today}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% ---------------------------------------------------------------------------
+\section{Overview}
+
+Ciphers is a small GTK3 desktop application for Linux that encrypts and
+decrypts arbitrary files under a single user password. It provides modern
+authenticated encryption (AEAD) and an optional \emph{post-quantum hybrid key
+encapsulation} layer that combines CRYSTALS-Kyber-1024 with the X448
+elliptic curve.
+
+This document describes the cryptographic design, the on-disk file format,
+the memory-hardening measures, the threat model, and — equally important —
+the properties that Ciphers explicitly does \emph{not} provide. It is
+intended for users evaluating the tool for sensitive data and for reviewers
+auditing its guarantees.
+
+\subsection{Design goals}
+\begin{itemize}[leftmargin=1.4em]
+  \item Confidentiality and integrity of file contents under a password.
+  \item Optional protection against a future quantum adversary
+        (``harvest-now, decrypt-later'').
+  \item Resistance to tampering, reordering and truncation of ciphertext.
+  \item Keeping secrets (password, derived keys, plaintext) off disk.
+  \item A small, auditable codebase built on vetted libraries.
+\end{itemize}
+
+\subsection{Non-goals}
+\begin{itemize}[leftmargin=1.4em]
+  \item Hiding the existence, size or type of an encrypted file
+        (no steganography or plausible deniability).
+  \item Filename, metadata or directory-structure encryption.
+  \item Multi-recipient / public-key sharing workflows.
+  \item Protection against a compromised host (keylogger, malicious GTK
+        input method, cold-boot attack on live RAM).
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Cryptographic primitives}
+
+All symmetric primitives are provided by \textbf{libsodium}; the X448 curve is
+provided by \textbf{OpenSSL} (\code{libcrypto}); the Kyber-1024 implementation
+is the CRYSTALS reference code (\code{KYBER\_K=4}, SHAKE/FIPS-202 variant),
+with randomness drawn from libsodium. Argon2id is provided by
+\textbf{libargon2}.
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Purpose} & \textbf{Primitive} & \textbf{Parameters}\\
+\midrule
+AEAD (default)      & AES-256-GCM              & 256-bit key, 96-bit nonce, 128-bit tag\\
+AEAD (alt.)         & XChaCha20-Poly1305       & 256-bit key, 192-bit nonce, 128-bit tag\\
+AEAD (alt.)         & ChaCha20-Poly1305 (IETF) & 256-bit key, 96-bit nonce, 128-bit tag\\
+Key derivation      & Argon2id                 & see Table~\ref{tab:kdf}\\
+PQ KEM              & CRYSTALS-Kyber-1024      & NIST security level 5\\
+Classical KEM       & X448 ECDH                & 448-bit curve\\
+Hybrid combiner     & BLAKE2b (keyed)          & domain ``\code{HYBRID}'', 32-byte output\\
+Key wrap            & XChaCha20-Poly1305       & wraps the hybrid secret key\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Key derivation}
+\label{sec:kdf}
+
+The password is stretched with Argon2id. Three presets are offered; the
+parameters are stored in the file header so decryption reproduces them.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Preset} & \textbf{Memory} & \textbf{Iterations} & \textbf{Parallelism}\\
+\midrule
+Basic   & 256\,MiB & 3 & 4 lanes\\
+Medium\,$^\dagger$ & 1\,GiB   & 3 & 4 lanes\\
+Strong  & 4\,GiB   & 4 & 8 lanes\\
+\bottomrule
+\end{tabular}
+\caption{Argon2id presets. $^\dagger$Medium is the minimum recommended for
+sensitive data.}
+\label{tab:kdf}
+\end{table}
+
+A fresh 16-byte random salt is generated per file, so identical passwords on
+different files yield independent keys and the KDF output cannot be
+precomputed or shared across files.
+
+% ---------------------------------------------------------------------------
+\section{File format}
+
+Every encrypted file begins with a fixed 40-byte header:
+
+\begin{center}
+\begin{tabular}{@{}rll@{}}
+\toprule
+\textbf{Offset} & \textbf{Size} & \textbf{Field}\\
+\midrule
+0  & 8  & Magic \code{"CIPHERS\textbackslash0"}\\
+8  & 1  & Format version (1 = password-only, 2 = hybrid)\\
+9  & 1  & Cipher id\\
+10 & 1  & KDF id (1 = Argon2id)\\
+11 & 1  & KDF level (informational)\\
+12 & 4  & Argon2 iterations (little-endian)\\
+16 & 4  & Argon2 memory in KiB (little-endian)\\
+20 & 4  & Argon2 parallelism (little-endian)\\
+24 & 16 & Salt\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+In hybrid files (version 2) a \emph{hybrid block} follows the header,
+containing the wrap nonce, the wrapped hybrid secret key and the KEM
+ciphertext. The base AEAD nonce follows, then the payload frames.
+
+\subsection{Chunked authenticated streaming}
+
+The plaintext is split into 64\,KiB chunks. Each chunk is encrypted as an
+independent AEAD frame:
+\[
+  \text{frame} = \underbrace{\texttt{len}}_{4\,\text{B}} \;\Vert\;
+  \underbrace{\text{ciphertext} \,\Vert\, \text{tag}}_{\texttt{len}\,\text{B}}.
+\]
+The per-chunk nonce is the random base nonce with a 64-bit little-endian
+counter XORed into its trailing eight bytes, guaranteeing a unique nonce per
+chunk under a given key. The associated data bound into each frame is
+\[
+  \text{AD} = \underbrace{\texttt{counter}}_{8\,\text{B}} \;\Vert\;
+  \underbrace{\texttt{final\_flag}}_{1\,\text{B}}.
+\]
+Binding the counter authenticates chunk \emph{ordering}; binding the
+end-of-stream flag authenticates that the last chunk really is the last one.
+Together these detect:
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{Tampering} — any modified ciphertext byte fails its Poly1305
+        / GCM tag.
+  \item \textbf{Reordering} — swapping frames breaks the counter binding.
+  \item \textbf{Truncation} — dropping the final frame(s) leaves a chunk whose
+        \code{final\_flag} no longer matches; the missing-final-block check
+        also fires.
+  \item \textbf{Splicing / extension} — appending frames after the
+        authenticated final frame is rejected.
+\end{itemize}
+These properties were validated empirically with round-trip, bit-flip,
+truncation and frame-swap tests across all three ciphers and the hybrid mode.
+
+% ---------------------------------------------------------------------------
+\section{Post-quantum hybrid KEM}
+
+When hybrid mode is enabled the file's AEAD key is not derived directly from
+the password. Instead:
+
+\begin{enumerate}[leftmargin=1.6em]
+  \item A fresh Kyber-1024 + X448 keypair is generated per file.
+  \item The hybrid \emph{secret} key (\code{kyber\_sk} $\Vert$
+        \code{x448\_sk}) is wrapped with XChaCha20-Poly1305 under a master
+        key derived from the password via Argon2id, bound to the domain
+        string \code{"CIPHERS-HYBRID-WRAP"}.
+  \item The KEM encapsulates to the matching public key, producing a 32-byte
+        shared secret that becomes the AEAD file key.
+  \item The shared secret is the keyed BLAKE2b combination of the Kyber and
+        X448 secrets, so the key stays secure as long as \emph{either}
+        primitive holds.
+\end{enumerate}
+
+On decryption the password unwraps the secret key, which decapsulates the KEM
+ciphertext back to the AEAD key. A single password therefore unlocks the
+file while the construction remains secure against a quantum adversary who
+can break X448 but not Kyber (and vice versa).
+
+\paragraph{Why public keys are not stored.} Decapsulation needs only the
+secret key and the KEM ciphertext, so the per-file public keys are
+deliberately omitted. This removes $\sim$1.6\,KiB of otherwise unauthenticated
+header bytes: the wrap nonce and wrapped secret key are covered by the wrap's
+Poly1305 tag, and the KEM ciphertext is covered transitively — altering it
+changes the decapsulated key and fails every subsequent frame tag.
+
+% ---------------------------------------------------------------------------
+\section{Memory hardening}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{No swap.} Passwords, derived keys and plaintext buffers are
+        pinned with \code{sodium\_mlock}, which prevents them from being
+        paged to the swap file and marks them \code{MADV\_DONTDUMP}.
+  \item \textbf{Zeroed after use.} The corresponding \code{sodium\_munlock}
+        wipes each buffer before releasing it.
+  \item \textbf{No core dumps.} \code{RLIMIT\_CORE} is set to zero and, on
+        Linux, \code{PR\_SET\_DUMPABLE} is cleared (blocking \code{ptrace}
+        and \code{/proc}-based core capture).
+  \item \textbf{Guarded password field.} The password \code{GtkEntry} is
+        backed by a custom \code{GtkEntryBuffer} whose text lives in
+        \code{sodium\_malloc}'d guarded memory (guard pages, locked, zeroed
+        on free).
+\end{itemize}
+
+\paragraph{Residual exposure.} GTK itself may keep transient copies of typed
+text in ordinary heap memory for on-screen rendering (Pango), the clipboard
+and the input method. These copies are outside Ciphers' control. The
+hardening therefore \emph{reduces} but cannot fully eliminate in-memory
+exposure of the password.
+
+% ---------------------------------------------------------------------------
+\section{Threat model}
+
+\subsection{In scope — what Ciphers defends against}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item A passive adversary who obtains the ciphertext file and attempts to
+        recover the plaintext without the password.
+  \item An active adversary who modifies, reorders, truncates or extends the
+        ciphertext: all such tampering is detected and decryption aborts.
+  \item Offline password guessing, slowed by memory-hard Argon2id and a
+        per-file salt.
+  \item A future quantum adversary (hybrid mode), under the
+        ``harvest-now, decrypt-later'' assumption.
+  \item Recovery of secrets from the swap file or a core dump on a
+        non-compromised host.
+\end{itemize}
+
+\subsection{Out of scope — what Ciphers does \emph{not} protect against}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{A compromised host.} Keyloggers, malicious input methods,
+        memory scrapers running as the same or a more privileged user, or
+        cold-boot attacks on live RAM are out of scope.
+  \item \textbf{Weak passwords.} Argon2id slows guessing but cannot rescue a
+        low-entropy password. Strength is the user's responsibility.
+  \item \textbf{Metadata leakage.} The file's existence, exact size
+        (to within one 64\,KiB chunk plus per-frame overhead), and the chosen
+        cipher/KDF parameters are visible in the clear. Filenames are not
+        encrypted.
+  \item \textbf{Deniability.} The \code{"CIPHERS\textbackslash0"} magic makes
+        an encrypted file trivially identifiable as such.
+  \item \textbf{Long-term key escrow / recovery.} There is no backdoor and no
+        recovery mechanism; a forgotten password means permanent data loss.
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Security properties at a glance}
+
+\begin{center}
+\begin{longtable}{@{}p{0.62\textwidth}c@{}}
+\toprule
+\textbf{Property} & \textbf{Provided}\\
+\midrule
+\endhead
+Confidentiality of file contents              & \yes\\
+Integrity / tamper detection (AEAD)           & \yes\\
+Reordering detection                          & \yes\\
+Truncation \& extension detection             & \yes\\
+Per-file unique salt and nonce                & \yes\\
+Memory-hard password stretching (Argon2id)    & \yes\\
+Post-quantum confidentiality (hybrid mode)    & \yes\\
+Secrets kept off swap / out of core dumps     & \yes\\
+Authenticated KDF \& format parameters        & \yes (transitively)\\
+\midrule
+Filename / metadata encryption                & \no\\
+Hiding that a file is encrypted (deniability) & \no\\
+Protection on a compromised host              & \no\\
+Password recovery / escrow                    & \no\\
+Multi-recipient public-key sharing            & \no\\
+\bottomrule
+\end{longtable}
+\end{center}
+
+% ---------------------------------------------------------------------------
+\section{Hardening notes \& known limitations}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{Untrusted headers are validated.} On decryption the Argon2id
+        parameters read from the file are range-checked (iterations,
+        parallelism, and the rule $m\_cost \ge 8 \times parallelism$, capped
+        at 4\,GiB / 16 iterations / 16 lanes) so a malicious file cannot force
+        an out-of-memory allocation or a hang.
+  \item \textbf{Atomic output.} Output is written to a sibling temporary file
+        and \code{rename()}d into place only on success, so a wrong password
+        or a cancelled run never truncates a pre-existing output. The
+        same-file check covers the input, the output and the temporary file.
+  \item \textbf{AES-256-GCM availability.} AES-256-GCM requires hardware AES
+        support; on CPUs without it the cipher is unavailable and the
+        ChaCha-based AEADs should be used instead.
+  \item \textbf{No formal audit.} The codebase has not undergone an
+        independent third-party security audit. It relies on well-reviewed
+        libraries (libsodium, OpenSSL, libargon2) and the CRYSTALS-Kyber
+        reference implementation, but the integration code itself is
+        unaudited.
+\end{itemize}
+
+\subsection*{Recent security fixes (v1.0.4)}
+\begin{itemize}[leftmargin=1.4em]
+  \item Hardened the libsodium-backed secure entry buffer to zero the unused
+        tail of its guarded allocation on every edit, so a typed-then-cleared
+        password no longer persists in locked memory until the widget is freed.
+  \item Fixed a potential integer overflow in the secure buffer's capacity
+        growth that could wrap to zero on a pathological paste.
+  \item Added \texttt{fsync} of the output file and its parent directory around
+        the atomic rename, so a crash or power loss cannot publish a truncated
+        or zero-length output file.
+\end{itemize}
+
+\subsection*{Recent security fixes (v1.0.3)}
+\begin{itemize}[leftmargin=1.4em]
+  \item Removed a use-after-free in the GUI progress timer that could fire
+        against freed state if the window was closed immediately after a job
+        finished.
+  \item Prevented the output's temporary file from resolving to, and
+        truncating, the input file.
+  \item Tightened validation of Argon2id parameters from untrusted headers.
+  \item Replaced silent truncation of over-long paths with an explicit error.
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Recommendations for users}
+
+\begin{enumerate}[leftmargin=1.6em]
+  \item Use a high-entropy passphrase; the KDF cannot compensate for a weak
+        one.
+  \item Choose \textbf{Medium} or \textbf{Strong} key strength for sensitive
+        data.
+  \item Enable \textbf{hybrid mode} for data that must stay confidential for
+        years (post-quantum margin).
+  \item Run Ciphers only on a trusted, up-to-date system; it cannot defend a
+        compromised host.
+  \item Keep an independent, secure backup of the password — there is no
+        recovery path.
+\end{enumerate}
+
+\vfill
+\begin{center}
+\small\textcolor{ink}{\textit{Ciphers is released under the MIT License. This
+report describes version 1.0.4 and is provided for informational purposes; it
+is not a warranty of fitness for any particular purpose.}}
+\end{center}
+
+\end{document}
