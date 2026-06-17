@@ -32,6 +32,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
 #ifdef __linux__
@@ -319,6 +321,32 @@ static int make_tmp_path(const char *out_path, char *buf, size_t buflen) {
     return (n < 0 || (size_t)n >= buflen) ? -1 : 0;
 }
 
+/* fsync the directory containing `path`, so the rename that publishes the new
+ * output is itself durable -- otherwise a crash just after rename() can leave
+ * the directory entry pointing at a truncated (or missing) file on some
+ * filesystems. Best-effort: failures here do not fail the operation. */
+static void fsync_parent_dir(const char *path) {
+    char dir[4096];
+    const char *slash = strrchr(path, '/');
+    if (slash == path) {
+        dir[0] = '/'; dir[1] = '\0';
+    } else if (slash) {
+        size_t n = (size_t)(slash - path);
+        if (n >= sizeof(dir)) return;
+        memcpy(dir, path, n); dir[n] = '\0';
+    } else {
+        dir[0] = '.'; dir[1] = '\0';
+    }
+    int fd = open(dir, O_RDONLY
+#ifdef O_DIRECTORY
+                  | O_DIRECTORY
+#endif
+                  );
+    if (fd < 0) return;
+    fsync(fd);
+    close(fd);
+}
+
 /* ----- Public API ------------------------------------------------------- */
 
 int ciphers_init(void) {
@@ -477,14 +505,16 @@ done:
     sodium_munlock(key, sizeof(key));
     sodium_munlock(plain, sizeof(plain));
     fclose(in);
-    /* Flush and confirm the temp file is intact before promoting it. */
-    if (ret == 0 && (fflush(out) != 0 || ferror(out))) {
+    /* Flush all the way to disk before the rename, so a crash or power loss
+     * cannot publish a truncated/zero-length output over a previous file. */
+    if (ret == 0 && (fflush(out) != 0 || ferror(out) || fsync(fileno(out)) != 0)) {
         seterr(err, errlen, "Write error."); ret = -1;
     }
     fclose(out);
     if (ret == 0 && rename(tmp_path, out_path) != 0) {
         seterr(err, errlen, "Could not write output file."); ret = -1;
     }
+    if (ret == 0) fsync_parent_dir(out_path);   /* make the rename durable */
     /* Only ever remove our own temp file, never a pre-existing output. */
     if (ret != 0) remove(tmp_path);
     return ret;
@@ -657,13 +687,16 @@ done:
     sodium_munlock(plain, sizeof(plain));
     if (in) fclose(in);
     if (out) {
-        if (ret == 0 && (fflush(out) != 0 || ferror(out))) {
+        /* Flush all the way to disk before the rename, so a crash or power loss
+         * cannot publish a truncated/zero-length output over a previous file. */
+        if (ret == 0 && (fflush(out) != 0 || ferror(out) || fsync(fileno(out)) != 0)) {
             seterr(err, errlen, "Write error."); ret = -1;
         }
         fclose(out);
         if (ret == 0 && rename(tmp_path, out_path) != 0) {
             seterr(err, errlen, "Could not write output file."); ret = -1;
         }
+        if (ret == 0) fsync_parent_dir(out_path);   /* make the rename durable */
         /* Only ever remove our own temp file, never a pre-existing output. */
         if (ret != 0) remove(tmp_path);
     }

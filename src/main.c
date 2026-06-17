@@ -12,7 +12,7 @@
 #include "secure_buffer.h"
 
 #ifndef CIPHERS_VERSION
-#define CIPHERS_VERSION "1.0.3"
+#define CIPHERS_VERSION "1.0.4"
 #endif
 #define APP_ID "org.ciphers.Ciphers"
 
