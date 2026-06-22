@@ -28,7 +28,7 @@ Author: **Jean-Francois Lachance-Caumartin**
 
 <div align="center">
 
-![Ciphers main window](screenshot_1.png)
+![Ciphers main window](screenshot.png)
 
 *The Ciphers main window — pick a cipher, key strength and (optionally) the
 post-quantum hybrid layer, then encrypt or decrypt with a single password.*
